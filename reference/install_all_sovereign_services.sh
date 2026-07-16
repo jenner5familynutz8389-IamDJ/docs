@@ -27,7 +27,7 @@ mkdir -p "$HOME/sovereign/ledger"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 backup() {
-    [ -f "$1" ] && cp "$1" "${1}.bak.$(date +%Y%m%d_%H%M%S)" && log "  Backed up: $1"
+    [ -f "$1" ] && cp "$1" "${1}.bak.$(date +%Y%m%d_%H%M%S)" && log "  Backed up: $1" || true
 }
 
 log "=== MIKAYA-SOVEREIGN Full Service Install ==="

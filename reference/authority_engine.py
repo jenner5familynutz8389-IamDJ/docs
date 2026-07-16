@@ -17,6 +17,7 @@ import time
 import threading
 import binascii
 import base64
+import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 
@@ -78,10 +79,114 @@ def lncli(*args):
         raise RuntimeError(r.stderr.strip())
     return json.loads(r.stdout)
 
+# ── Runtime stats ─────────────────────────────────────────────────
+_START_TIME = time.time()
+_stats = {"issued": 0, "settled": 0, "sats_earned": 0}
+
 # ── Invoice store ─────────────────────────────────────────────────
 # r_hash_hex → {"payment_request": str, "expires_at": float, "settled": bool}
 _invoices: dict = {}
 _lock = threading.Lock()
+
+# ── Diagnostics ───────────────────────────────────────────────────
+def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+def _find_pid(name_fragment: str) -> int:
+    """Return PID of first process whose cmdline contains name_fragment, or 0."""
+    try:
+        r = subprocess.run(
+            ["pgrep", "-f", name_fragment],
+            capture_output=True, text=True, timeout=3,
+        )
+        pids = r.stdout.strip().split()
+        return int(pids[0]) if pids else 0
+    except Exception:
+        return 0
+
+def _node_status() -> dict:
+    """Query LND for node info and wallet balance. Returns a diagnostic dict."""
+    result = {
+        "lnd_grpc_open": _port_open("127.0.0.1", 10009),
+        "macaroon_present": os.path.isfile(MACAROON),
+        "tlscert_present":  os.path.isfile(TLSCERT),
+        "status": "unknown",
+    }
+    if not result["lnd_grpc_open"]:
+        result["status"] = "unreachable"
+        return result
+    if not result["macaroon_present"]:
+        result["status"] = "no_macaroon"
+        return result
+    if not result["tlscert_present"]:
+        result["status"] = "no_tlscert"
+        return result
+    try:
+        info = lncli("getinfo")
+        result.update({
+            "status":          "online",
+            "pubkey":          info.get("identity_pubkey", ""),
+            "alias":           info.get("alias", ""),
+            "block_height":    info.get("block_height", 0),
+            "synced_to_chain": info.get("synced_to_chain", False),
+            "synced_to_graph": info.get("synced_to_graph", False),
+            "num_peers":       info.get("num_peers", 0),
+            "num_active_channels": info.get("num_active_channels", 0),
+        })
+    except RuntimeError as e:
+        err = str(e).lower()
+        result["status"] = (
+            "locked" if ("locked" in err or "wallet" in err) else "error"
+        )
+        result["error"] = str(e)[:200]
+        return result
+
+    try:
+        wb = lncli("walletbalance")
+        result["wallet"] = {
+            "confirmed_sats":   int(wb.get("confirmed_balance", 0)),
+            "unconfirmed_sats": int(wb.get("unconfirmed_balance", 0)),
+            "total_sats":       int(wb.get("total_balance", 0)),
+        }
+    except Exception as e:
+        result["wallet"] = {"error": str(e)[:100]}
+
+    try:
+        pending = lncli("pendingchannels")
+        result["pending_channels"] = len(
+            pending.get("pending_open_channels", [])
+        )
+    except Exception:
+        result["pending_channels"] = -1
+
+    return result
+
+def _service_pids() -> dict:
+    return {
+        "lnd":              _find_pid("bin/lnd"),
+        "authority_engine": _find_pid("authority_engine.py"),
+        "auto_channel":     _find_pid("auto_channel_watcher.py"),
+        "auto_unlock":      _find_pid("auto_unlock.sh"),
+    }
+
+def _diagnose_invoice_failure(err: str) -> str:
+    """Return a human-readable reason the gateway couldn't create an invoice."""
+    e = err.lower()
+    if not os.path.isfile(TLSCERT):
+        return f"TLS cert missing: {TLSCERT}"
+    if not os.path.isfile(MACAROON):
+        return f"Macaroon missing: {MACAROON}"
+    if not _port_open("127.0.0.1", 10009):
+        return "LND gRPC port 10009 not open — LND not running"
+    if "locked" in e or "wallet" in e:
+        return "LND wallet is locked — auto_unlock.sh needs to run"
+    if "no such file" in e:
+        return f"File not found — check TLSCERT={TLSCERT} and MACAROON={MACAROON}"
+    return err
 
 def create_invoice(memo: str = "MIKAYA-SOVEREIGN L402") -> tuple:
     """Returns (r_hash_hex, bolt11_payment_request)."""
@@ -91,7 +196,6 @@ def create_invoice(memo: str = "MIKAYA-SOVEREIGN L402") -> tuple:
         "--memo",   memo,
         "--expiry", str(INVOICE_EXPIRY),
     )
-    # lncli returns r_hash as hex string
     r_hash_hex = data["r_hash"]
     bolt11     = data["payment_request"]
     with _lock:
@@ -100,6 +204,7 @@ def create_invoice(memo: str = "MIKAYA-SOVEREIGN L402") -> tuple:
             "expires_at":      time.time() + INVOICE_EXPIRY,
             "settled":         False,
         }
+        _stats["issued"] += 1
     return r_hash_hex, bolt11
 
 def is_paid(r_hash_hex: str) -> bool:
@@ -199,6 +304,25 @@ class L402Handler(BaseHTTPRequestHandler):
         self._handle(self._body())
 
     def _handle(self, payload: dict):
+        # ── Status / diagnostics endpoint ─────────────────────────
+        if self.path.rstrip("/") in ("/status", "/health", "/diag"):
+            node = _node_status()
+            with _lock:
+                stats_snap = dict(_stats)
+            self._send(200, {
+                "sovereign":   "MIKAYA-SOVEREIGN",
+                "engine":      "authority-engine",
+                "port":        PORT,
+                "pid":         os.getpid(),
+                "uptime_s":    round(time.time() - _START_TIME),
+                "node":        node,
+                "services":    _service_pids(),
+                "invoice_sat": INVOICE_SAT,
+                "stats":       stats_snap,
+                "ahava":       AHAVA,
+            })
+            return
+
         auth = self.headers.get("Authorization", "")
 
         # ── Paid request ──────────────────────────────────────────
@@ -225,6 +349,9 @@ class L402Handler(BaseHTTPRequestHandler):
                 log(f"PAID r_hash={r_hash_hex[:16]}... evaluating prompt")
                 response = evaluate(str(prompt))
 
+                with _lock:
+                    _stats["settled"]    += 1
+                    _stats["sats_earned"] += INVOICE_SAT
                 entry = {
                     "ts":          datetime.now().isoformat(),
                     "event":       "L402_SETTLED",
@@ -275,9 +402,16 @@ class L402Handler(BaseHTTPRequestHandler):
                 },
             )
         except Exception as e:
+            reason = _diagnose_invoice_failure(str(e))
             self._send(503, {
-                "error": f"Cannot create invoice: {e}",
-                "hint":  "Is LND running and wallet unlocked?",
+                "error":       "Cannot create invoice",
+                "reason":      reason,
+                "credentials": {
+                    "macaroon_present": os.path.isfile(MACAROON),
+                    "tlscert_present":  os.path.isfile(TLSCERT),
+                    "lnd_grpc_open":    _port_open("127.0.0.1", 10009),
+                },
+                "fix":  "curl http://127.0.0.1:8443/status for full diagnostics",
             })
 
 # ── Main ──────────────────────────────────────────────────────────
@@ -287,6 +421,11 @@ if __name__ == "__main__":
     log(f"Listening on 0.0.0.0:{PORT}")
     log(f"Invoice: {INVOICE_SAT} sats | Expiry: {INVOICE_EXPIRY}s")
     log(f"AHAVA: {AHAVA}")
+    log(f"PID: {os.getpid()}")
+    log("--- credential check ---")
+    log(f"  MACAROON : {'OK' if os.path.isfile(MACAROON) else 'MISSING'} ({MACAROON})")
+    log(f"  TLSCERT  : {'OK' if os.path.isfile(TLSCERT)  else 'MISSING'} ({TLSCERT})")
+    log(f"  LND gRPC : {'OPEN' if _port_open('127.0.0.1', 10009) else 'CLOSED'}")
     log("=" * 60)
     server = HTTPServer(("0.0.0.0", PORT), L402Handler)
     try:

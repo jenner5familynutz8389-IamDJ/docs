@@ -29,6 +29,46 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 # ============================================================
+# ANTHROPIC API — direct HTTP (no SDK required, just requests)
+# Set ANTHROPIC_API_KEY in env to activate this path.
+# Falls back to Ollama or ai_bootstrap when key is absent.
+# ============================================================
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_MODEL   = "claude-haiku-4-5-20251001"   # fast + cheap for edge
+ANTHROPIC_VERSION = "2023-06-01"
+
+def _call_anthropic_api(user_prompt: str, system_prompt: str, api_key: str) -> Optional[str]:
+    """
+    Call Anthropic Messages API via raw HTTP.
+    Returns the assistant's text reply, or None on any failure.
+    """
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+    }
+    body = {
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 1024,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+    try:
+        resp = requests.post(ANTHROPIC_API_URL, headers=headers, json=body, timeout=60)
+        if resp.status_code == 200:
+            data = resp.json()
+            # Anthropic response: {"content": [{"type": "text", "text": "..."}], ...}
+            content = data.get("content", [])
+            texts = [block.get("text", "") for block in content if block.get("type") == "text"]
+            return "\n".join(texts).strip() or None
+        else:
+            print(f"[ANTHROPIC] API error {resp.status_code}: {resp.text[:200]}")
+            return None
+    except Exception as e:
+        print(f"[ANTHROPIC] Request failed: {e}")
+        return None
+
+# ============================================================
 # INJECT THE FULL SOVEREIGN MANIFEST (same as ai_bootstrap.py)
 # ============================================================
 SOVEREIGN_SYSTEM_PROMPT = """
@@ -120,18 +160,38 @@ def evaluate_with_sovereign_ai(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             print(f"[AI] Local Ollama failed: {e}. Falling back...")
 
-    # Fallback: remote bootstrap (requires OPENAI_API_KEY or equivalent in env)
+    # Fallback 1: Anthropic API (set ANTHROPIC_API_KEY in env)
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    if anthropic_key:
+        reply = _call_anthropic_api(user_prompt, SOVEREIGN_SYSTEM_PROMPT, anthropic_key)
+        if reply:
+            return {
+                "status": "success",
+                "source": "anthropic_api",
+                "model": ANTHROPIC_MODEL,
+                "response": reply,
+                "timestamp": datetime.now().isoformat()
+            }
+        print("[AI] Anthropic API call failed. Falling back to bootstrap...")
+
+    # Fallback 2: ai_bootstrap (OpenAI or legacy Anthropic SDK path)
     try:
         from ai_bootstrap import query_ai_with_sovereign_context
         reply = query_ai_with_sovereign_context(
             user_prompt=user_prompt,
-            api_key=os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
-            model="gpt-4o" if os.getenv("OPENAI_API_KEY") else "claude-3-5-sonnet-20241022"
+            api_key=os.getenv("OPENAI_API_KEY"),
+            model="gpt-4o"
+        )
+        # OpenAI response format: choices[0].message.content
+        content = (
+            reply.get("choices", [{}])[0]
+                 .get("message", {})
+                 .get("content", str(reply))
         )
         return {
             "status": "success",
-            "source": "remote_bootstrap",
-            "response": reply.get("choices", [{}])[0].get("message", {}).get("content", str(reply)),
+            "source": "ai_bootstrap_openai",
+            "response": content,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:

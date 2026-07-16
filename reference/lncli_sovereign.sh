@@ -27,7 +27,7 @@
 # ═══════════════════════════════════════════════════════════════════
 
 MACAROON="$HOME/sovereign/lnd/data/chain/bitcoin/mainnet/admin.macaroon"
-TLSCERT="$HOME/sovereign/lnd/tls.cert"
+TLSCERT="$HOME/.lnd/tls.cert"
 
 if [ ! -f "$MACAROON" ]; then
     echo "[SOVEREIGN-LNCLI] ERROR: macaroon not found at $MACAROON"

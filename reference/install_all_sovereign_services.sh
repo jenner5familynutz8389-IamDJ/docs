@@ -112,16 +112,20 @@ chmod +x "$SVDIR/auto-channel/run"
 log "  Installed: $SVDIR/auto-channel/run"
 
 # ── 6. Runit service: auto-unlock (wallet unlock on boot) ─────────
+# One-shot pattern: run auto_unlock.sh then sleep 23h so runit does
+# NOT loop-restart it on failure. sv restart auto-unlock to re-run manually.
 log "Installing runit service: auto-unlock..."
 mkdir -p "$SVDIR/auto-unlock"
 backup "$SVDIR/auto-unlock/run"
 cat > "$SVDIR/auto-unlock/run" <<RUNEOF
 #!/data/data/com.termux/files/usr/bin/bash
-# Run once then exit (not a daemon)
-exec bash $SCRIPT_DIR/auto_unlock.sh
+bash $SCRIPT_DIR/auto_unlock.sh
+# Hold the slot — runit must see a running process or it restarts us.
+# 23h sleep means one auto-unlock attempt per reboot, never a spin loop.
+exec sleep 82800
 RUNEOF
 chmod +x "$SVDIR/auto-unlock/run"
-log "  Installed: $SVDIR/auto-unlock/run"
+log "  Installed: $SVDIR/auto-unlock/run (one-shot, 23h hold)"
 
 # ── 7. DuraSpeed boot script ──────────────────────────────────────
 log "Installing DuraSpeed boot script..."

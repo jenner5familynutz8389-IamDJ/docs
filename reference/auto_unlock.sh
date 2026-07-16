@@ -23,7 +23,7 @@
 
 PASS_FILE="$HOME/.config/sovereign/wallet.pw"
 MACAROON="$HOME/sovereign/lnd/data/chain/bitcoin/mainnet/admin.macaroon"
-TLSCERT="$HOME/sovereign/lnd/tls.cert"
+TLSCERT="$HOME/.lnd/tls.cert"
 LOG_DIR="$HOME/sovereign/logs"
 LOG="$LOG_DIR/auto_unlock.log"
 GRPC_PORT=10009

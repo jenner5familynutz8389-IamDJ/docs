@@ -27,7 +27,7 @@ POLL_INTERVAL       = 60       # seconds between balance checks
 MACAROON = os.path.expanduser(
     "~/sovereign/lnd/data/chain/bitcoin/mainnet/admin.macaroon"
 )
-TLSCERT = os.path.expanduser("~/sovereign/lnd/tls.cert")
+TLSCERT = os.path.expanduser("~/.lnd/tls.cert")
 
 LOG_DIR     = os.path.expanduser("~/sovereign/logs")
 LEDGER_FILE = os.path.expanduser("~/sovereign/ledger/event_spine.jsonl")

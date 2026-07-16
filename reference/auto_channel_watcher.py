@@ -27,7 +27,21 @@ POLL_INTERVAL       = 60       # seconds between balance checks
 MACAROON = os.path.expanduser(
     "~/sovereign/lnd/data/chain/bitcoin/mainnet/admin.macaroon"
 )
-TLSCERT = os.path.expanduser("~/.lnd/tls.cert")
+
+def _find_tls_cert() -> str:
+    candidates = [
+        os.path.expanduser("~/.lnd/tls.cert"),
+        os.path.expanduser("~/sovereign/lnd/tls.cert"),
+        os.path.expanduser("~/sovereign/lnd/data/tls.cert"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    import glob
+    hits = glob.glob(os.path.expanduser("~/**/tls.cert"), recursive=True)
+    return hits[0] if hits else candidates[0]
+
+TLSCERT = _find_tls_cert()
 
 LOG_DIR     = os.path.expanduser("~/sovereign/logs")
 LEDGER_FILE = os.path.expanduser("~/sovereign/ledger/event_spine.jsonl")

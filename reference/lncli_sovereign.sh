@@ -6,36 +6,38 @@
 # INSTALL (one time):
 #   cp lncli_sovereign.sh ~/bin/lncli_sovereign
 #   chmod +x ~/bin/lncli_sovereign
-#   # Then add to ~/.bashrc:
 #   alias lncli_s='~/bin/lncli_sovereign'
 #
-# OR for a seamless drop-in (replaces bare lncli in current shell):
-#   alias lncli='~/bin/lncli_sovereign'
-#
-# WHY:
-#   lnd.conf sets datadir=~/sovereign/lnd/data (custom path for
-#   SD-card sovereignty / eMMC separation).  lncli defaults to
-#   ~/.lnd/ and fails to find the macaroon.  This wrapper bakes in
-#   the correct --macaroonpath so every subcommand just works.
-#
-# USAGE — identical to lncli:
-#   lncli_sovereign newaddress p2wkh
-#   lncli_sovereign getinfo
-#   lncli_sovereign walletbalance
-#   lncli_sovereign listchannels
-#   lncli_sovereign addinvoice --amt 100
+# WHY: lnd.conf uses a custom datadir so lncli can't find macaroons
+# by default. This wrapper bakes in the correct paths.
 # ═══════════════════════════════════════════════════════════════════
 
 MACAROON="$HOME/sovereign/lnd/data/chain/bitcoin/mainnet/admin.macaroon"
-TLSCERT="$HOME/.lnd/tls.cert"
+
+# Discover tls.cert at runtime — handles any lnddir location
+TLSCERT=""
+for _c in \
+    "$HOME/.lnd/tls.cert" \
+    "$HOME/sovereign/lnd/tls.cert" \
+    "$HOME/sovereign/lnd/data/tls.cert"; do
+    [ -f "$_c" ] && { TLSCERT="$_c"; break; }
+done
+if [ -z "$TLSCERT" ]; then
+    TLSCERT=$(find "$HOME" -maxdepth 6 -name "tls.cert" 2>/dev/null | head -1)
+fi
 
 if [ ! -f "$MACAROON" ]; then
-    echo "[SOVEREIGN-LNCLI] ERROR: macaroon not found at $MACAROON"
+    echo "[SOVEREIGN-LNCLI] ERROR: macaroon not found: $MACAROON"
     echo "  Is LND running and wallet unlocked?"
+    exit 1
+fi
+if [ -z "$TLSCERT" ]; then
+    echo "[SOVEREIGN-LNCLI] ERROR: tls.cert not found anywhere under $HOME"
+    echo "  Is LND running? Try: find ~ -name tls.cert 2>/dev/null"
     exit 1
 fi
 
 exec lncli \
     --macaroonpath "$MACAROON" \
-    --tlscertpath "$TLSCERT" \
+    --tlscertpath  "$TLSCERT" \
     "$@"

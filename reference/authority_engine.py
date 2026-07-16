@@ -414,6 +414,26 @@ class L402Handler(BaseHTTPRequestHandler):
                 "fix":  "curl http://127.0.0.1:8443/status for full diagnostics",
             })
 
+# ── Startup readiness watcher ─────────────────────────────────────
+def _readiness_watcher():
+    """Background thread: logs LND/wallet status every 10s until online."""
+    for _ in range(60):   # give up logging after 10 min
+        time.sleep(10)
+        try:
+            lncli("getinfo")
+            log("LND wallet confirmed ONLINE — L402 gateway fully operational")
+            return
+        except RuntimeError as e:
+            err = str(e).lower()
+            if "locked" in err or "wallet" in err:
+                log("LND wallet still LOCKED — waiting for auto_unlock...")
+            elif not _port_open("127.0.0.1", 10009):
+                log("LND gRPC not open yet — LND still starting...")
+            else:
+                log(f"LND not ready: {str(e)[:80]}")
+        except Exception:
+            pass
+
 # ── Main ──────────────────────────────────────────────────────────
 if __name__ == "__main__":
     log("=" * 60)
@@ -427,6 +447,7 @@ if __name__ == "__main__":
     log(f"  TLSCERT  : {'OK' if os.path.isfile(TLSCERT)  else 'MISSING'} ({TLSCERT})")
     log(f"  LND gRPC : {'OPEN' if _port_open('127.0.0.1', 10009) else 'CLOSED'}")
     log("=" * 60)
+    threading.Thread(target=_readiness_watcher, daemon=True).start()
     server = HTTPServer(("0.0.0.0", PORT), L402Handler)
     try:
         server.serve_forever()

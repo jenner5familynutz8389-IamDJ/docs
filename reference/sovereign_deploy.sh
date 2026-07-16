@@ -120,31 +120,51 @@ else
     log "└─────────────────────────────────────────────────────┘"
 fi
 
-# ── 10. Test L402 gateway ─────────────────────────────────────────
+# ── 10. Wait for L402 gateway to go live (up to 5 min) ───────────
 log ""
-log "Testing L402 gateway (3 attempts, 5s each)..."
+log "Waiting for L402 gateway to go live (max 5 min)..."
+log "  Wallet unlock typically takes 30-90s after LND starts."
 GATEWAY_OK=0
-for attempt in 1 2 3; do
+for attempt in $(seq 1 60); do
     sleep 5
-    RESULT=$(curl -s --max-time 5 http://127.0.0.1:8443/query 2>&1) || true
+    RESULT=$(curl -s --max-time 4 http://127.0.0.1:8443/query 2>&1) || true
+
     if echo "$RESULT" | grep -q '"invoice"'; then
-        log "  L402 LIVE on attempt $attempt"
+        log "  ✓ L402 LIVE (attempt $attempt, $((attempt * 5))s)"
         INVOICE=$(echo "$RESULT" | python3 -c \
-            'import sys,json; d=json.load(sys.stdin); print(d.get("invoice","?")[:60]+"...")' \
+            'import sys,json; d=json.load(sys.stdin); print(d.get("invoice","?")[:72]+"...")' \
             2>/dev/null || echo "(parse error)")
         log "  Invoice: $INVOICE"
         GATEWAY_OK=1
         break
-    elif echo "$RESULT" | grep -qi "lnd\|locked\|macaroon\|wallet"; then
-        log "  Attempt $attempt: gateway up, wallet unlocking..."
+
+    elif echo "$RESULT" | grep -qi '"locked"\|wallet locked\|wallet.*lock'; then
+        [ $((attempt % 6)) -eq 1 ] && log "  [${attempt}] wallet still locked — auto-unlock running..."
+
+    elif echo "$RESULT" | grep -qi 'no_tlscert\|no_macaroon'; then
+        log "  FATAL: credential file missing — check authority_engine.log"
+        log "  $RESULT"
+        break
+
+    elif echo "$RESULT" | grep -qi '"lnd_grpc_open": false\|unreachable'; then
+        [ $((attempt % 6)) -eq 1 ] && log "  [${attempt}] LND gRPC not open yet — LND starting..."
+
     else
-        log "  Attempt $attempt: not yet responding ($RESULT)"
+        [ $((attempt % 6)) -eq 1 ] && log "  [${attempt}] waiting... ($RESULT)"
     fi
 done
 
 if [ $GATEWAY_OK -eq 0 ]; then
-    log "  Gateway not responding after 15s."
-    log "  Check: tail -50 $LOG_DIR/authority_engine.log"
+    log ""
+    log "  Gateway not live after $((60 * 5))s. Diagnostics:"
+    STATUS=$(curl -s --max-time 5 http://127.0.0.1:8443/status 2>/dev/null || echo "{}")
+    NODE_STATUS=$(echo "$STATUS" | python3 -c \
+        'import sys,json; d=json.load(sys.stdin); print(d.get("node",{}).get("status","?"))' \
+        2>/dev/null || echo "unknown")
+    log "  Node status: $NODE_STATUS"
+    log "  Full diag:   curl http://127.0.0.1:8443/status"
+    log "  Engine log:  tail -50 $LOG_DIR/authority_engine.log"
+    log "  Unlock log:  tail -50 $LOG_DIR/auto_unlock.log"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────

@@ -35,18 +35,35 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [AUTO-UNLOCK] $*" | tee -a "$LOG"; 
 # ── Check password file ───────────────────────────────────────────
 if [ ! -f "$PASS_FILE" ]; then
     log "ERROR: Password file missing: $PASS_FILE"
-    log "Fix: mkdir -p ~/.config/sovereign && echo 'YOUR_PASSWORD' > $PASS_FILE && chmod 600 $PASS_FILE"
+    log "Fix: printf '%s' 'YOUR_PASSWORD' > $PASS_FILE && chmod 600 $PASS_FILE"
     exit 1
 fi
 chmod 600 "$PASS_FILE"
 
+# Guard against placeholder text left in the file
+PW_CONTENT="$(cat "$PASS_FILE")"
+if [ -z "$PW_CONTENT" ]; then
+    log "ERROR: $PASS_FILE is empty"
+    exit 1
+fi
+case "$PW_CONTENT" in
+    YOUR_*|PLACEHOLDER*|PASSWORD*|"<"*|"["*)
+        log "ERROR: $PASS_FILE still contains placeholder text: $PW_CONTENT"
+        log "Fix: printf '%s' 'your-real-lnd-wallet-password' > $PASS_FILE && chmod 600 $PASS_FILE"
+        exit 1
+        ;;
+esac
+
 # ── Wait for LND gRPC port ────────────────────────────────────────
+# Use bash /dev/tcp — works without netcat (nc may not be in Termux)
 log "Waiting for LND gRPC on port $GRPC_PORT..."
 WAITED=0
 MAX_WAIT=300  # 5 minutes
-while ! nc -z 127.0.0.1 $GRPC_PORT 2>/dev/null; do
+tcp_open() { (echo > /dev/tcp/127.0.0.1/$GRPC_PORT) 2>/dev/null; }
+while ! tcp_open; do
     sleep 3
     WAITED=$((WAITED + 3))
+    [ $((WAITED % 30)) -eq 0 ] && log "  still waiting for gRPC (${WAITED}s)..."
     if [ $WAITED -ge $MAX_WAIT ]; then
         log "ERROR: LND gRPC did not come up after ${MAX_WAIT}s. Is LND running?"
         exit 1

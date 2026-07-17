@@ -68,10 +68,15 @@ cd "$DOCS_DIR"
 bash reference/install_all_sovereign_services.sh || true
 log "  Installer done"
 
-# ── 5. Stop any running runsvdir ──────────────────────────────────
-log "Stopping runsvdir..."
+# ── 5. Kill all service processes before stopping runsvdir ───────
+# Must kill children first — pkill runsvdir alone leaves orphans that
+# block port 8443 and prevent the fresh authority-engine from starting.
+log "Stopping services and runsvdir..."
+pkill -f "authority_engine" 2>/dev/null || true
+pkill -f "auto_channel_watcher" 2>/dev/null || true
+pkill -f "auto_unlock" 2>/dev/null || true
 pkill -f "runsvdir.*runit/sv" 2>/dev/null || true
-sleep 3
+sleep 4   # give orphans time to die
 
 # ── 6. Remove stale supervise locks ───────────────────────────────
 log "Clearing stale supervise state..."

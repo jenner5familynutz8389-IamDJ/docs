@@ -44,10 +44,10 @@ log "  DNS: 8.8.8.8 / 1.1.1.1"
 # ── 2. Sync repo — force, no conflicts possible ───────────────────
 log "Syncing repo from GitHub..."
 if [ -d "$DOCS_DIR/.git" ]; then
-    # Fix permissions first in case a bad paste mangled them
+    # Force-sync: discard any local modifications so checkout never aborts
     chmod -R u+rwX "$DOCS_DIR" 2>/dev/null || true
     git -C "$DOCS_DIR" fetch origin "$BRANCH"
-    git -C "$DOCS_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
+    git -C "$DOCS_DIR" reset --hard "origin/$BRANCH"
     log "  Reset to origin/$BRANCH"
 else
     mkdir -p "$(dirname "$DOCS_DIR")"

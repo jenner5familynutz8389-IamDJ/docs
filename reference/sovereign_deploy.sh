@@ -57,6 +57,15 @@ fi
 chmod -R u+rwX "$DOCS_DIR"
 log "  Repo: $(git -C "$DOCS_DIR" log -1 --format='%h %s')"
 
+# ── 2b. Re-exec the freshly synced copy of THIS script ────────────
+# bash keeps reading the old file handle after git replaces the file,
+# so without this the rest of the deploy runs STALE logic (this is how
+# orphaned services survived past deploys). Re-exec exactly once.
+if [ -z "${SOVEREIGN_DEPLOY_RESYNCED:-}" ]; then
+    log "  Re-executing freshly synced deploy script..."
+    exec env SOVEREIGN_DEPLOY_RESYNCED=1 bash "$DOCS_DIR/reference/sovereign_deploy.sh"
+fi
+
 # ── 3. Python deps ────────────────────────────────────────────────
 log "Checking Python deps..."
 python3 -c "import requests" 2>/dev/null || pip install --quiet requests

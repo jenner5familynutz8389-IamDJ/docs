@@ -297,11 +297,23 @@ class L402Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        # CORS — the manus.space store calls this gateway from the browser
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         if extra_headers:
             for k, v in extra_headers.items():
                 self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
@@ -335,6 +347,53 @@ class L402Handler(BaseHTTPRequestHandler):
                 "stats":       stats_snap,
                 "ahava":       AHAVA,
             })
+            return
+
+        # ── Anchor endpoint — sign an ASGS ledger hash with the node key ──
+        # POST /anchor {"hash": "<64-hex ledger hash>", "ref": "<stripe pi_...>"}
+        # Signs with the LND node identity key (lncli signmessage) — costs
+        # nothing, works with zero balance, verifiable by anyone against the
+        # node pubkey. The signature is the blockchainAnchorId payload.
+        if self.path.rstrip("/") == "/anchor":
+            ledger_hash = str(payload.get("hash", "")).strip()
+            ref         = str(payload.get("ref", "")).strip()[:120]
+            if not ledger_hash:
+                self._send(400, {
+                    "error": "missing 'hash'",
+                    "usage": 'POST /anchor {"hash": "<ledger block hash>", "ref": "<payment ref>"}',
+                })
+                return
+            ts = datetime.now().isoformat()
+            signed_message = f"ASGS-ANCHOR|{ledger_hash}|{ref}|{ts}"
+            try:
+                sig  = lncli("signmessage", "--msg", signed_message)
+                info = lncli("getinfo")
+                pubkey = info.get("identity_pubkey", "")
+                entry = {
+                    "ts":        ts,
+                    "event":     "LEDGER_ANCHOR_SIGNED",
+                    "hash":      ledger_hash,
+                    "ref":       ref,
+                    "message":   signed_message,
+                    "signature": sig.get("signature", ""),
+                    "pubkey":    pubkey,
+                }
+                ledger_append(entry)
+                log(f"ANCHOR signed hash={ledger_hash[:16]}... ref={ref[:40]}")
+                self._send(200, {
+                    "status":         "anchored",
+                    "anchor_type":    "lnd-node-signature",
+                    "signed_message": signed_message,
+                    "signature":      sig.get("signature", ""),
+                    "node_pubkey":    pubkey,
+                    "verify":         "lncli verifymessage --msg '<signed_message>' --sig '<signature>'",
+                    "note":           "On-chain OP_RETURN anchoring activates once wallet is funded.",
+                })
+            except Exception as e:
+                self._send(503, {
+                    "error":  "Cannot sign anchor",
+                    "reason": _diagnose_invoice_failure(str(e)),
+                })
             return
 
         auth = self.headers.get("Authorization", "")

@@ -75,12 +75,14 @@ log "Stopping services and runsvdir..."
 pkill -f "authority_engine" 2>/dev/null || true
 pkill -f "auto_channel_watcher" 2>/dev/null || true
 pkill -f "auto_unlock" 2>/dev/null || true
+pkill -f "sovereign_tunnel" 2>/dev/null || true
+pkill -f "cloudflared" 2>/dev/null || true
 pkill -f "runsvdir.*runit/sv" 2>/dev/null || true
 sleep 4   # give orphans time to die
 
 # ── 6. Remove stale supervise locks ───────────────────────────────
 log "Clearing stale supervise state..."
-for svc in lnd authority-engine auto-channel auto-unlock; do
+for svc in lnd authority-engine auto-channel auto-unlock tunnel; do
     rm -rf "$SV_DIR/$svc/supervise"
 done
 
@@ -106,6 +108,11 @@ log "Starting services..."
 sv_start lnd
 sv_start authority-engine
 sv_start auto-channel
+if command -v cloudflared >/dev/null 2>&1; then
+    sv_start tunnel
+else
+    log "  tunnel: skipped (cloudflared not installed — pkg install cloudflared -y)"
+fi
 
 # ── 9. Auto-unlock wallet ─────────────────────────────────────────
 if [ -f "$PASS_FILE" ]; then
@@ -170,6 +177,18 @@ if [ $GATEWAY_OK -eq 0 ]; then
     log "  Full diag:   curl http://127.0.0.1:8443/status"
     log "  Engine log:  tail -50 $LOG_DIR/authority_engine.log"
     log "  Unlock log:  tail -50 $LOG_DIR/auto_unlock.log"
+fi
+
+# ── 11. Report public tunnel URL ─────────────────────────────────
+TUNNEL_URL=""
+for _t in $(seq 1 6); do
+    [ -f "$LOG_DIR/tunnel_url.txt" ] && TUNNEL_URL=$(cat "$LOG_DIR/tunnel_url.txt") && break
+    sleep 5
+done
+if [ -n "$TUNNEL_URL" ]; then
+    log ""
+    log "PUBLIC GATEWAY URL: $TUNNEL_URL"
+    log "  (changes on every tunnel restart — current: cat $LOG_DIR/tunnel_url.txt)"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────

@@ -127,6 +127,19 @@ RUNEOF
 chmod +x "$SVDIR/auto-unlock/run"
 log "  Installed: $SVDIR/auto-unlock/run (one-shot, 23h hold)"
 
+# ── 6b. Runit service: tunnel (public URL via Cloudflare) ─────────
+log "Installing runit service: tunnel..."
+mkdir -p "$SVDIR/tunnel"
+backup "$SVDIR/tunnel/run"
+cat > "$SVDIR/tunnel/run" <<RUNEOF
+#!/data/data/com.termux/files/usr/bin/bash
+exec bash $SCRIPT_DIR/sovereign_tunnel.sh 2>&1
+RUNEOF
+chmod +x "$SVDIR/tunnel/run"
+log "  Installed: $SVDIR/tunnel/run"
+command -v cloudflared >/dev/null 2>&1 || \
+    log "  NOTE: cloudflared not installed yet — run: pkg install cloudflared -y"
+
 # ── 7. DuraSpeed boot script ──────────────────────────────────────
 log "Installing DuraSpeed boot script..."
 backup "$BOOT_DIR/disable_duraspeed"
@@ -181,6 +194,7 @@ log "  lnd               → Lightning Network Daemon (CPU-pinned A55 cores)"
 log "  authority-engine  → L402 micropayment gateway on :8443"
 log "  auto-channel      → watches balance, opens channel when funded"
 log "  auto-unlock       → unlocks wallet on every boot"
+log "  tunnel            → public HTTPS URL for the gateway (cat ~/sovereign/logs/tunnel_url.txt)"
 log ""
 log "TEST (after starting stack):"
 log "  curl http://127.0.0.1:8443/query"
